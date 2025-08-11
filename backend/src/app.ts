@@ -9,9 +9,11 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
-import { JwtUser, GiftSocketPayload, GiftReceivedEvent } from 'shared-types';
+import { GiftSocketPayload, GiftReceivedEvent } from 'shared-types';
 import { config } from './config.js';
 import { calcXpGain, calcLevel } from './xp.js';
+import { User, Gift, GiftEvent } from './models.js';
+import { giftData } from './seeds/data.js';
 
 dotenv.config();
 
@@ -21,37 +23,7 @@ const REDIS_URL = config.redisUrl;
 const JWT_SECRET = config.jwtSecret;
 const REFRESH_SECRET = config.refreshSecret;
 
-// --- Mongo Models ---
-interface IUser extends mongoose.Document { handle: string; password?: string; tokens: number; xp: number; level: number; roles: string[]; }
-const UserSchema = new mongoose.Schema<IUser>({
-  handle: { type: String, unique: true, required: true },
-  password: { type: String },
-  tokens: { type: Number, default: 0 },
-  xp: { type: Number, default: 0 },
-  level: { type: Number, default: 1 },
-  roles: { type: [String], default: ['viewer'] }
-},{ timestamps: true });
-const User = mongoose.model<IUser>('User', UserSchema);
-
-interface IGift extends mongoose.Document { code: string; name: string; tokenCost: number; animationKey?: string; commandAction?: string; }
-const GiftSchema = new mongoose.Schema<IGift>({
-  code: { type: String, unique: true, required: true },
-  name: { type: String, required: true },
-  tokenCost: { type: Number, required: true },
-  animationKey: String,
-  commandAction: String
-});
-const Gift = mongoose.model<IGift>('Gift', GiftSchema);
-
-interface IGiftEvent extends mongoose.Document { giftCode: string; fromUser: mongoose.Types.ObjectId; streamId?: string; tokens: number; commandAction?: string; }
-const GiftEventSchema = new mongoose.Schema<IGiftEvent>({
-  giftCode: String,
-  fromUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  streamId: String,
-  tokens: Number,
-  commandAction: String
-},{ timestamps: { createdAt: true, updatedAt: false } });
-const GiftEvent = mongoose.model<IGiftEvent>('GiftEvent', GiftEventSchema);
+// Models moved to models.ts
 
 // --- Redis Leaderboards ---
 const redis = new Redis(REDIS_URL);
@@ -80,6 +52,16 @@ function authMiddleware(req: any, res: any, next: any) {
 
 // --- Routes ---
 app.get('/api/health', (_req: express.Request, res: express.Response) => res.json({ status: 'ok' }));
+app.get('/api/health/deep', async (_req: express.Request, res: express.Response) => {
+  const mongoState = mongoose.connection.readyState; // 1 = connected
+  let redisOk = false;
+  try { redisOk = (await redis.ping()) === 'PONG'; } catch { redisOk = false; }
+  const [userCount, giftCount] = mongoState === 1 ? await Promise.all([
+    User.countDocuments().catch(()=>0),
+    Gift.countDocuments().catch(()=>0)
+  ]) : [0,0];
+  res.json({ status: mongoState === 1 && redisOk ? 'ok' : 'degraded', mongo: mongoState, redis: redisOk, counts: { users: userCount, gifts: giftCount } });
+});
 
 // Rate limiting (basic global limiter)
 const apiLimiter = rateLimit({ windowMs: 60_000, max: 120 });
@@ -223,15 +205,10 @@ giftsNs.on('connection', (socket) => {
 // xp utilities moved to xp.ts
 
 async function seedGifts() {
-  const count = await Gift.countDocuments();
-  if (count === 0) {
-    await Gift.insertMany([
-      { code: 'HEART', name: 'Heart', tokenCost: 10, animationKey: 'heart-pop' },
-      { code: 'STAR', name: 'Star', tokenCost: 25, animationKey: 'star-burst' },
-      { code: 'FIRE', name: 'Fire', tokenCost: 50, animationKey: 'flame-rise', commandAction: 'overlay:fire' }
-    ]);
-    console.log('Seeded default gifts');
+  for (const g of giftData) {
+    await Gift.updateOne({ code: g.code }, { $set: g }, { upsert: true });
   }
+  console.log(`Ensured ${giftData.length} gifts in catalog`);
 }
 
 async function start() {

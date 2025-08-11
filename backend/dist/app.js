@@ -11,37 +11,15 @@ import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { config } from './config.js';
 import { calcXpGain, calcLevel } from './xp.js';
+import { User, Gift, GiftEvent } from './models.js';
+import { giftData } from './seeds/data.js';
 dotenv.config();
 // --- Config ---
 const MONGO_URL = config.mongoUrl;
 const REDIS_URL = config.redisUrl;
 const JWT_SECRET = config.jwtSecret;
 const REFRESH_SECRET = config.refreshSecret;
-const UserSchema = new mongoose.Schema({
-    handle: { type: String, unique: true, required: true },
-    password: { type: String },
-    tokens: { type: Number, default: 0 },
-    xp: { type: Number, default: 0 },
-    level: { type: Number, default: 1 },
-    roles: { type: [String], default: ['viewer'] }
-}, { timestamps: true });
-const User = mongoose.model('User', UserSchema);
-const GiftSchema = new mongoose.Schema({
-    code: { type: String, unique: true, required: true },
-    name: { type: String, required: true },
-    tokenCost: { type: Number, required: true },
-    animationKey: String,
-    commandAction: String
-});
-const Gift = mongoose.model('Gift', GiftSchema);
-const GiftEventSchema = new mongoose.Schema({
-    giftCode: String,
-    fromUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    streamId: String,
-    tokens: Number,
-    commandAction: String
-}, { timestamps: { createdAt: true, updatedAt: false } });
-const GiftEvent = mongoose.model('GiftEvent', GiftEventSchema);
+// Models moved to models.ts
 // --- Redis Leaderboards ---
 const redis = new Redis(REDIS_URL);
 const LEADERBOARD_KEY = 'leaderboard:giftTokens';
@@ -70,6 +48,21 @@ function authMiddleware(req, res, next) {
 }
 // --- Routes ---
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
+app.get('/api/health/deep', async (_req, res) => {
+    const mongoState = mongoose.connection.readyState; // 1 = connected
+    let redisOk = false;
+    try {
+        redisOk = (await redis.ping()) === 'PONG';
+    }
+    catch {
+        redisOk = false;
+    }
+    const [userCount, giftCount] = mongoState === 1 ? await Promise.all([
+        User.countDocuments().catch(() => 0),
+        Gift.countDocuments().catch(() => 0)
+    ]) : [0, 0];
+    res.json({ status: mongoState === 1 && redisOk ? 'ok' : 'degraded', mongo: mongoState, redis: redisOk, counts: { users: userCount, gifts: giftCount } });
+});
 // Rate limiting (basic global limiter)
 const apiLimiter = rateLimit({ windowMs: 60_000, max: 120 });
 app.use('/api/', apiLimiter);
@@ -221,15 +214,10 @@ giftsNs.on('connection', (socket) => {
 });
 // xp utilities moved to xp.ts
 async function seedGifts() {
-    const count = await Gift.countDocuments();
-    if (count === 0) {
-        await Gift.insertMany([
-            { code: 'HEART', name: 'Heart', tokenCost: 10, animationKey: 'heart-pop' },
-            { code: 'STAR', name: 'Star', tokenCost: 25, animationKey: 'star-burst' },
-            { code: 'FIRE', name: 'Fire', tokenCost: 50, animationKey: 'flame-rise', commandAction: 'overlay:fire' }
-        ]);
-        console.log('Seeded default gifts');
+    for (const g of giftData) {
+        await Gift.updateOne({ code: g.code }, { $set: g }, { upsert: true });
     }
+    console.log(`Ensured ${giftData.length} gifts in catalog`);
 }
 async function start() {
     await mongoose.connect(MONGO_URL);

@@ -7,8 +7,10 @@
     "build": "tsc -p tsconfig.json",
     "dev": "ts-node-dev --respawn --transpile-only src/app.ts",
     "start": "NODE_ENV=production node dist/app.js",
-  "lint": "eslint 'src/**/*.ts'",
-  "test": "vitest run"
+    "lint": "eslint 'src/**/*.ts'",
+    "test": "vitest run",
+  "seed": "ts-node-dev --transpile-only src/seed.ts",
+  "db:check": "ts-node-dev --transpile-only src/scripts/checkMongo.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

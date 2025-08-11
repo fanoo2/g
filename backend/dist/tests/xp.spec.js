@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
-// Minimal duplication of XP logic (could export from app.ts via a util module)
-function calcXpGain(tokens) { return tokens; }
-function calcLevel(xp) { return Math.max(1, Math.floor(xp / 500) + 1); }
+import { calcXpGain, calcLevel } from '../xp.js';
 describe('XP System', () => {
     it('gives 1 xp per token', () => {
         expect(calcXpGain(42)).toBe(42);
