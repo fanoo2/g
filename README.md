@@ -22,16 +22,20 @@ Enable creators and viewers to *co-create* the live experience: gifts trigger ac
 ## Current Repo Status (MVP Scaffold)
 | Area | Status |
 |------|--------|
-| Backend (Express + Socket.IO) | Basic health route + chat & gift events |
-| Frontend (Next.js) | Basic prototype page with chat & gift send UI |
-| AI Recommendation Service (FastAPI) | Placeholder /recommend endpoint |
-| Realtime | Socket.IO basic events wired |
-| Docker Compose | Multi-service dev orchestration |
-| DB/Storage | Not yet integrated |
-| Auth | Pending (JWT + OAuth planned) |
-| Payments | Pending (Stripe planned) |
-| Leaderboards | Pending (Redis sorted sets planned) |
-| Token Economy | Pending (on-chain optional future, centralized first) |
+| Backend (Express + Socket.IO) | Chat + gifts namespaces, gift validation, XP/levels, top-up stub |
+| Frontend (Next.js + Tailwind) | TS pages, auth/register/login UI, gift send, dark mode, namespaces |
+| AI Recommendation Service (FastAPI) | Placeholder /recommend endpoint (no model yet) |
+| Realtime | Namespaced sockets (/chat, /gifts) with JWT auth passthrough |
+| Docker Compose | Multi-service (frontend, backend, Mongo, Redis, AI) |
+| DB/Storage (MongoDB) | Integrated: Users, Gifts (seeded), GiftEvents persisted |
+| Cache / Leaderboards (Redis) | Integrated: gift tokens leaderboard (ZSET) with handle enrichment |
+| Auth | Implemented: JWT access + refresh tokens; Password hashing; (OAuth pending) |
+| Token Economy | Implemented: token balance, spend on gift send, top-up endpoint stub |
+| Gamification | Implemented: XP gain + level calc (simple formula) |
+| Payments | Pending (Stripe integration & webhooks) |
+| Hybrid Streaming / Media | Pending (WebRTC SFU integration) |
+| Recommendations | Placeholder service only (data pipeline pending) |
+| Observability | Pending (pino/OTel deps added; wiring pending) |
 
 ## Monorepo Structure
 ```
@@ -56,12 +60,12 @@ docker-compose.yml    # Dev orchestration
 | Concern | Tech | Notes |
 |---------|------|-------|
 | API / Realtime | Express + Socket.IO | Consider scaling with Redis adapter, later WebRTC SFU for media |
-| Persistence | MongoDB (planned) | Flexible for evolving schemas |
+| Persistence | MongoDB (integrated) | Users, gifts, gift events stored; seeding on startup |
 | Cache / RT Metrics | Redis | Leaderboards, pub/sub, rate limiting |
 | Media | External SFU (Janus / LiveKit) | Integrate via WebRTC tokens |
 | Client | Next.js + React | SEO + hybrid pages + mobile-first |
-| Styling | TailwindCSS (planned) | Rapid theme iteration & dark mode |
-| Auth | JWT + OAuth (Google/Twitch/X) | Social growth |
+| Styling | TailwindCSS (integrated) | Dark mode toggle, utility-first iteration |
+| Auth | JWT (access + refresh) + planned OAuth | Secure session rotation, future social growth |
 | Payments | Stripe | Gifts purchase, subscriptions |
 | AI | FastAPI service | Will add embedding + ranking pipeline |
 
@@ -161,12 +165,58 @@ overlay:trigger
 - Load: simulate concurrent viewers (k6 / Locust) focusing on chat + gifts
 - AI: offline evaluation set for recommendation precision@k
 
-## Next Implementation Steps (Short Term)
-1. Add ESLint/TypeScript upgrade (backend & frontend)
-2. Introduce Mongo + Redis clients (config abstraction)
-3. Implement user model & auth routes
-4. Replace naive gift broadcast with validation + persistence
-5. Add basic leaderboard endpoint (Redis sorted set)
+## Verification: Mongo & Redis Integration
+You can verify persistence and leaderboard functionality with these manual checks after starting services.
+
+1. Register a user (seeds 100 tokens):
+```
+curl -X POST http://localhost:4000/api/auth/register \
+	-H 'Content-Type: application/json' \
+	-d '{"handle":"tester1","password":"secret123"}'
+```
+Response includes an access token and refresh token.
+
+2. List seeded gifts:
+```
+mongosh livestream --eval 'db.gifts.find({}, {code:1,name:1,tokenCost:1,_id:0}).toArray()'
+```
+
+3. Send a gift (via socket namespace /gifts):
+Use a WebSocket client or frontend UI; payload: `{ code: "HEART" }` with auth token.
+
+4. Confirm gift event persisted:
+```
+mongosh livestream --eval 'db.giftevents.find({}, {giftCode:1, tokens:1, fromUser:1, createdAt:1}).limit(3).toArray()'
+```
+
+5. Check leaderboard (Redis ZSET reflected through API):
+```
+curl http://localhost:4000/api/leaderboard/gifts | jq
+```
+
+6. Top-up tokens (stub economic flow):
+```
+curl -X POST http://localhost:4000/api/wallet/topup \
+	-H "Authorization: Bearer <ACCESS_TOKEN>" \
+	-H 'Content-Type: application/json' \
+	-d '{"amount":50}'
+```
+
+7. Refresh access token (session continuity):
+```
+curl -X POST http://localhost:4000/api/auth/refresh \
+	-H 'Content-Type: application/json' \
+	-d '{"refresh":"<REFRESH_TOKEN>"}'
+```
+
+## Updated Immediate Next Steps
+1. Move gift seeding to a standalone script (avoid prod reseed).
+2. Add integration tests (gift send -> DB + leaderboard).
+3. Implement pino logging + request correlation + health deep check (mongo & redis ping).
+4. Add Stripe payment intent + webhook stub for real token purchases.
+5. Begin WebRTC SFU integration (auth token issuance) for live media.
+6. Add polling/Q&A socket namespaces & mood aggregation events.
+7. Export metrics (Prometheus) + OTel tracing spans.
 
 ## Contributing
 Iterate in small vertical slices (backend event + frontend UI + persistence) to keep features demoable.
