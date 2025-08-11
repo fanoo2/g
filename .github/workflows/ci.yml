@@ -21,6 +21,12 @@ jobs:
         with:
           node-version: 20
           cache: npm
+          # Specify all lockfiles in the monorepo so setup-node can enable caching.
+          # Without this, it looks only at the repository root and throws the missing lockfile error.
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+            shared/package-lock.json
       - name: Install shared
         run: |
           cd shared && npm install
